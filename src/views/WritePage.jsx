@@ -11,6 +11,7 @@ import '@blocknote/mantine/style.css';
 import '../styles/editor/editor.css';
 import '../styles/katex-fonts.css';
 import { readTimeFromWords } from '../../lib/readTime';
+import { getLimits } from '../../lib/tiers';
 import { IMAGE_ACCEPT_ATTR, isAllowedImage } from '../utils/allowedImageTypes';
 import { generatePixelAvatar } from '../utils/pixelAvatar';
 import { useCollaboration } from '../hooks/useCollaboration';
@@ -471,7 +472,7 @@ export default function WritePage({ slugid }) {
   const [collabLock, setCollabLock] = useState(null);
   const [collabLockDismissed, setCollabLockDismissed] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
-  const [conflict, setConflict] = useState(null); // { message, currentVersion, status }
+  const [memberOnly, setMemberOnly] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [pendingLeaveUrl, setPendingLeaveUrl] = useState(null);
   const [showMdReplaceConfirm, setShowMdReplaceConfirm] = useState(false);
@@ -788,6 +789,7 @@ export default function WritePage({ slugid }) {
         if (Number.isFinite(cloud.cover_pos_x) && Number.isFinite(cloud.cover_pos_y)) setCoverPos({ x: cloud.cover_pos_x, y: cloud.cover_pos_y });
         if (Number.isFinite(cloud.cover_zoom)) setCoverZoom(cloud.cover_zoom);
         if (cloud.page_emoji) setPageEmoji(cloud.page_emoji);
+        setMemberOnly(!!cloud.member_only);
         if (version) { setBlogVersion(version); setLastKnownUpdatedAt(version.updatedAt); }
 
         // Content: use the server copy unless localStorage holds strictly newer
@@ -1181,7 +1183,7 @@ export default function WritePage({ slugid }) {
   }, [title, draftLoading, editorReady]);
 
   // Serialized publish-settings, used to detect "nothing changed" on Update.
-  const settingsKey = () => JSON.stringify({ title, subtitle, tags, publishAs, collectionId, pageEmoji, coverPreview, coverPos, coverZoom, slug });
+  const settingsKey = () => JSON.stringify({ title, subtitle, tags, publishAs, collectionId, pageEmoji, coverPreview, coverPos, coverZoom, slug, memberOnly });
   // Capture a baseline once the blog has finished loading.
   useEffect(() => {
     if (!draftLoading && settingsSnapshotRef.current === '') settingsSnapshotRef.current = settingsKey();
@@ -1211,7 +1213,7 @@ export default function WritePage({ slugid }) {
       const res = await fetch('/api/blogs/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slugid: blogId, title, subtitle, tags, publishAs, collectionId, editorContent, pageEmoji, coverUrl: coverPreview, coverPos, coverZoom, slug, status: targetStatus, lastKnownUpdatedAt }),
+        body: JSON.stringify({ slugid: blogId, title, subtitle, tags, publishAs, collectionId, editorContent, pageEmoji, coverUrl: coverPreview, coverPos, coverZoom, slug, status: targetStatus, lastKnownUpdatedAt, member_only: memberOnly }),
       });
 
       if (res.status === 409) {
@@ -1262,7 +1264,7 @@ export default function WritePage({ slugid }) {
       await fetch('/api/blogs/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slugid: blogId, title, subtitle, tags, publishAs, collectionId, editorContent, pageEmoji, slug, status: 'unlisted', lastKnownUpdatedAt }),
+        body: JSON.stringify({ slugid: blogId, title, subtitle, tags, publishAs, collectionId, editorContent, pageEmoji, slug, status: 'unlisted', lastKnownUpdatedAt, member_only: memberOnly }),
       });
       setShowPublishPanel(false);
     } catch { /* silent */ }
@@ -2409,6 +2411,46 @@ export default function WritePage({ slugid }) {
               Co-authors can view, edit, or admin — the post cross-posts to their profile.
             </p>
           </div>
+
+          {/* Member-only toggle — visible only to member-tier authors */}
+          {getLimits(user?.tier).canMarkMemberOnly && (
+            <div>
+              <label className="text-[12px] font-medium mb-2 block" style={{ color: 'var(--text-muted)' }}>
+                Visibility
+              </label>
+              <button
+                onClick={() => setMemberOnly(v => !v)}
+                className="w-full flex items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-[13px] transition-colors"
+                style={{
+                  backgroundColor: memberOnly ? '#e8a84014' : 'var(--bg-app)',
+                  border: memberOnly ? '1px solid #e8a84050' : '1px solid var(--border-default)',
+                }}
+              >
+                <span className="flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                  <ion-icon
+                    name={memberOnly ? 'sparkles' : 'globe-outline'}
+                    style={{ fontSize: '16px', color: memberOnly ? '#e8a840' : 'var(--text-muted)' }}
+                  />
+                  {memberOnly ? 'Member-only' : 'Everyone'}
+                </span>
+                {/* Toggle pill */}
+                <div
+                  className="relative w-9 h-5 rounded-full transition-colors flex-shrink-0"
+                  style={{ backgroundColor: memberOnly ? '#e8a840' : 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+                >
+                  <div
+                    className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform"
+                    style={{ transform: memberOnly ? 'translateX(18px)' : 'translateX(2px)' }}
+                  />
+                </div>
+              </button>
+              <p className="text-[11px] mt-1" style={{ color: 'var(--text-faint)' }}>
+                {memberOnly
+                  ? 'Only members can read the full content. Non-members see a teaser.'
+                  : 'Visible to all readers.'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Bottom actions */}

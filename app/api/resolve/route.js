@@ -2,6 +2,8 @@ export const runtime = 'edge';
 import { NextResponse } from 'next/server';
 import { decompressBlogContent } from '../../../lib/compress';
 import { STAFF_ORG_ID } from '../../../lib/staff';
+import { getLimits } from '../../../lib/tiers';
+import { getSession } from '../../../lib/auth';
 
 // Accepted co-authors (max 10) with display info for multi-author bylines.
 async function fetchCoAuthors(db, blogId) {
@@ -29,9 +31,66 @@ function decompressBlog(blog) {
   }
   return blog;
 }
+async function memberOnlyGate(blog, session) {
+  if (!blog.member_only) return null; 
+
+  
+  if (session?.userId && session.userId === blog.author_id) return null;
+
+  
+  let viewerTier = 'free';
+  if (session?.userId) {
+    
+    try {
+      const { getDB } = await import('../../../lib/cloudflare');
+      const db = getDB();
+      const viewer = await db.prepare('SELECT tier FROM users WHERE id = ?')
+        .bind(session.userId).first();
+      viewerTier = viewer?.tier || 'free';
+    } catch { /* stay 'free' on error */ }
+  }
+
+  const limits = getLimits(viewerTier);
+  if (limits.canReadMemberOnly) return null; 
+
+  let teaser = null;
+  try {
+    const blocks = Array.isArray(blog.content) ? blog.content : JSON.parse(blog.content || '[]');
+    const text = blocks
+      .flatMap(b => (Array.isArray(b.content) ? b.content : []))
+      .map(c => c.text || '')
+      .join(' ')
+      .trim();
+    teaser = text.slice(0, 300) || null;
+  } catch { /* no teaser on parse error */ }
+
+  return NextResponse.json({
+    type: 'blog',
+    gated: true,
+    member_only: true,
+    blog: {
+      id: blog.id,
+      slug: blog.slug,
+      title: blog.title,
+      subtitle: blog.subtitle,
+      cover_image_r2_key: blog.cover_image_r2_key,
+      page_emoji: blog.page_emoji,
+      read_time_minutes: blog.read_time_minutes,
+      published_at: blog.published_at,
+      author_id: blog.author_id,
+      author_username: blog.author_username,
+      author_name: blog.author_name,
+      author_avatar: blog.author_avatar,
+      member_only: true,
+      content: null,   
+      teaser,
+    },
+  }, { status: 200 });
+}
 
 // Resolve @name to user or org, optionally fetch a blog by slug
 export async function GET(request) {
+  const session = await getSession(); // needed for member-only gate
   const { searchParams } = new URL(request.url);
   const name = (searchParams.get('name') || '').trim().toLowerCase();
   const slug = (searchParams.get('slug') || '').trim().toLowerCase();
@@ -107,6 +166,10 @@ export async function GET(request) {
           db.prepare('SELECT tag FROM blog_tags WHERE blog_id = ?').bind(blog.id).all(),
           fetchCoAuthors(db, blog.id),
         ]);
+
+        // Gate member-only posts before decompressing content
+        const gated = await memberOnlyGate(blog, session);
+        if (gated) return gated;
 
         return NextResponse.json({
           type: 'blog',
@@ -184,6 +247,9 @@ export async function GET(request) {
           db.prepare('SELECT tag FROM blog_tags WHERE blog_id = ?').bind(blog.id).all(),
           fetchCoAuthors(db, blog.id),
         ]);
+        const gated2 = await memberOnlyGate(blog, session);
+        if (gated2) return gated2;
+
         return NextResponse.json({
           type: 'blog',
           owner: { type: 'org', ...org },
@@ -247,6 +313,9 @@ export async function GET(request) {
           db.prepare('SELECT tag FROM blog_tags WHERE blog_id = ?').bind(blog.id).all(),
           fetchCoAuthors(db, blog.id),
         ]);
+        const gated3 = await memberOnlyGate(blog, session);
+        if (gated3) return gated3;
+
         return NextResponse.json({
           type: 'blog',
           owner: { type: 'org', ...org },
