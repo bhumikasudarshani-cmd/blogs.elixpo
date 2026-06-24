@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '../../../../lib/auth';
 import { requestTooLarge, byteLength, MAX_BLOG_CONTENT_BYTES, MAX_TITLE_LEN, MAX_SUBTITLE_LEN } from '../../../../lib/limits';
 import { readTimeFromWords } from '../../../../lib/readTime';
+import { getLimits } from '../../../../lib/tiers';
 
 export async function POST(request) {
   const session = await getSession();
@@ -15,7 +16,8 @@ export async function POST(request) {
   }
 
   const body = await request.json();
-  const { slugid, title, subtitle, tags, publishAs, editorContent, pageEmoji, coverUrl, coverPos, coverZoom, status, lastKnownUpdatedAt, slug: requestedSlug, collectionId } = body;
+  const { slugid, title, subtitle, tags, publishAs, editorContent, pageEmoji, coverUrl, coverPos, coverZoom, status, lastKnownUpdatedAt, slug: requestedSlug, collectionId, member_only: memberOnlyRaw } = body;
+  const memberOnly = memberOnlyRaw === true; 
   const posX = Number.isFinite(coverPos?.x) ? coverPos.x : 50;
   const posY = Number.isFinite(coverPos?.y) ? coverPos.y : 50;
   const zoom = Number.isFinite(coverZoom) ? coverZoom : 1;
@@ -56,6 +58,17 @@ export async function POST(request) {
     const { checkPublishSafety } = await import('../../../../lib/blog-version');
     const db = getDB();
     const now = Math.floor(Date.now() / 1000);
+    if (memberOnly) {
+      const authorRow = await db.prepare('SELECT tier FROM users WHERE id = ?')
+        .bind(session.userId).first();
+      const limits = getLimits(authorRow?.tier);
+      if (!limits.canMarkMemberOnly) {
+        return NextResponse.json(
+          { error: 'Member-only posts require a Member subscription.' },
+          { status: 403 }
+        );
+       }
+      }
     const readTime = readTimeFromWords(countWords(editorContent));
     const compressedContent = editorContent ? compressBlogContent(editorContent) : '';
     const { excerptFromBlocks } = await import('../../../../lib/excerpt');
@@ -136,13 +149,15 @@ export async function POST(request) {
         ? (existing.status === 'draft' ? now : null)
         : null;
 
+      
       let query = `
         UPDATE blogs SET title = ?, subtitle = ?, slug = ?, content = ?, excerpt = ?, published_as = ?,
           collection_id = ?, status = ?, page_emoji = ?, cover_image_r2_key = ?, cover_pos_x = ?, cover_pos_y = ?, cover_zoom = ?,
-          read_time_minutes = ?, updated_at = ?
+          read_time_minutes = ?, updated_at = ?, member_only = ?
       `;
       const params = [title, subtitle || '', slug, compressedContent, excerpt, publishAs || 'personal',
-        finalCollectionId, targetStatus, pageEmoji || '', coverUrl || '', posX, posY, zoom, readTime, now];
+        finalCollectionId, targetStatus, pageEmoji || '', coverUrl || '', posX, posY, zoom, readTime, now, memberOnly ? 1 : 0];
+      
 
       if (publishedAt) {
         query += ', published_at = ?';
@@ -156,13 +171,14 @@ export async function POST(request) {
       // Create and publish in one step
       await db.prepare(`
         INSERT INTO blogs (id, slug, title, subtitle, content, excerpt, author_id, published_as, collection_id, status,
-          page_emoji, cover_image_r2_key, cover_pos_x, cover_pos_y, cover_zoom, read_time_minutes, created_at, updated_at, published_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          page_emoji, cover_image_r2_key, cover_pos_x, cover_pos_y, cover_zoom, read_time_minutes, created_at, updated_at, published_at, member_only)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         slugid, slug, title, subtitle || '', compressedContent, excerpt,
         session.userId, publishAs || 'personal', finalCollectionId, targetStatus,
         pageEmoji || '', coverUrl || '', posX, posY, zoom, readTime, now, now,
-        (targetStatus === 'published' || targetStatus === 'unlisted') ? now : null
+        (targetStatus === 'published' || targetStatus === 'unlisted') ? now : null,
+        memberOnly ? 1 : 0
       ).run();
     }
 
