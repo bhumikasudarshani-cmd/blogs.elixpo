@@ -24,7 +24,7 @@ export async function GET(request) {
     const { decompressBlogContent } = await import('../../../../lib/compress');
     const db = getDB();
 
-    const COLS = 'id, slug, title, subtitle, content, cover_image_r2_key, cover_pos_x, cover_pos_y, cover_zoom, author_id, published_as, status, page_emoji, collection_id';
+    const COLS = 'id, slug, title, subtitle, content, cover_image_r2_key, cover_pos_x, cover_pos_y, cover_zoom, author_id, published_as, status, page_emoji, collection_id, member_only';
 
     // The param may be the canonical id (new blogs) or the human slug (edit links).
     // Resolve by id first; otherwise by slug scoped to a blog THIS user can edit
