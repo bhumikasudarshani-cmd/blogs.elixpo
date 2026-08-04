@@ -13,6 +13,9 @@ export const runtime = 'edge';
 import { verifyBearerToken, hasScope } from '../../../../lib/api-v1/auth.js';
 import { generateRequestId, errors, apiSuccess } from '../../../../lib/api-v1/errors.js';
 import { parsePagination, encodeCursor, InvalidCursorError } from '../../../../lib/api-v1/pagination.js';
+import { checkRateLimit, rateLimitHeaders } from '../../../../lib/api-v1/rateLimit.js';
+
+const ENDPOINT_NAME = 'GET /api/v1/blogs';
 
 export async function GET(request) {
   const requestId = generateRequestId();
@@ -24,6 +27,13 @@ export async function GET(request) {
 
   if (!hasScope(auth, 'read')) {
     return errors.insufficientScope(requestId);
+  }
+
+  const rateLimit = await checkRateLimit(auth.userId, ENDPOINT_NAME);
+  if (!rateLimit.allowed) {
+    const res = errors.rateLimited(requestId);
+    for (const [k, v] of Object.entries(rateLimitHeaders(rateLimit))) res.headers.set(k, v);
+    return res;
   }
 
   const { searchParams } = new URL(request.url);
@@ -101,7 +111,7 @@ export async function GET(request) {
         })),
         pagination: { nextCursor, hasMore },
       },
-      { requestId },
+      { requestId, headers: rateLimitHeaders(rateLimit) },
     );
   } catch (err) {
     console.error('[api/v1/blogs] list error:', err);

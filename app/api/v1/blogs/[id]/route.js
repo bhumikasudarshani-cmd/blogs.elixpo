@@ -23,6 +23,7 @@ export const runtime = 'edge';
 import { verifyBearerToken, hasScope } from '../../../../../lib/api-v1/auth.js';
 import { generateRequestId, errors, apiSuccess } from '../../../../../lib/api-v1/errors.js';
 import { etagFor, isMatchingEtag } from '../../../../../lib/api-v1/etag.js';
+import { checkRateLimit, rateLimitHeaders } from '../../../../../lib/api-v1/rateLimit.js';
 import {
   requestTooLarge,
   byteLength,
@@ -65,6 +66,13 @@ export async function GET(request, { params }) {
   if (!auth) return errors.invalidToken(requestId);
   if (!hasScope(auth, 'read')) return errors.insufficientScope(requestId);
 
+  const rateLimit = await checkRateLimit(auth.userId, 'GET /api/v1/blogs/:id');
+  if (!rateLimit.allowed) {
+    const res = errors.rateLimited(requestId);
+    for (const [k, v] of Object.entries(rateLimitHeaders(rateLimit))) res.headers.set(k, v);
+    return res;
+  }
+
   try {
     const { getDB } = await import('../../../../../lib/cloudflare.js');
     const { canEditBlog } = await import('../../../../../lib/permissions.js');
@@ -86,7 +94,7 @@ export async function GET(request, { params }) {
 
     return apiSuccess(
       { blog: serializeBlog(blog) },
-      { requestId, headers: { ETag: etagFor(blog) } },
+      { requestId, headers: { ETag: etagFor(blog), ...rateLimitHeaders(rateLimit) } },
     );
   } catch (err) {
     console.error('[api/v1/blogs/:id] get error:', err);
@@ -101,6 +109,13 @@ export async function PATCH(request, { params }) {
   const auth = await verifyBearerToken(request);
   if (!auth) return errors.invalidToken(requestId);
   if (!hasScope(auth, 'draft')) return errors.insufficientScope(requestId);
+
+  const rateLimit = await checkRateLimit(auth.userId, 'PATCH /api/v1/blogs/:id');
+  if (!rateLimit.allowed) {
+    const res = errors.rateLimited(requestId);
+    for (const [k, v] of Object.entries(rateLimitHeaders(rateLimit))) res.headers.set(k, v);
+    return res;
+  }
 
   if (requestTooLarge(request)) {
     return errors.validationError(requestId, 'Request body too large');
@@ -200,7 +215,7 @@ export async function PATCH(request, { params }) {
 
     return apiSuccess(
       { blog: serializeBlog(updated) },
-      { requestId, headers: { ETag: etagFor(updated) } },
+      { requestId, headers: { ETag: etagFor(updated), ...rateLimitHeaders(rateLimit) } },
     );
   } catch (err) {
     console.error('[api/v1/blogs/:id] patch error:', err);
