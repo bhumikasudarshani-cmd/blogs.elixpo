@@ -23,6 +23,13 @@ export const runtime = 'edge';
 import { verifyBearerToken, hasScope } from '../../../../../lib/api-v1/auth.js';
 import { generateRequestId, errors, apiSuccess } from '../../../../../lib/api-v1/errors.js';
 import { etagFor, isMatchingEtag } from '../../../../../lib/api-v1/etag.js';
+import {
+  requestTooLarge,
+  byteLength,
+  MAX_BLOG_CONTENT_BYTES,
+  MAX_TITLE_LEN,
+  MAX_SUBTITLE_LEN,
+} from '../../../../../lib/limits.js';
 
 function serializeBlog(b) {
   return {
@@ -95,6 +102,10 @@ export async function PATCH(request, { params }) {
   if (!auth) return errors.invalidToken(requestId);
   if (!hasScope(auth, 'draft')) return errors.insufficientScope(requestId);
 
+  if (requestTooLarge(request)) {
+    return errors.validationError(requestId, 'Request body too large');
+  }
+
   const ifMatch = request.headers.get('if-match');
   if (!ifMatch) {
     return errors.validationError(requestId, 'If-Match header is required for edits');
@@ -117,6 +128,26 @@ export async function PATCH(request, { params }) {
       requestId,
       `Request body must include at least one of: ${allowedFields.join(', ')}`,
     );
+  }
+
+  // Same size/length limits enforced everywhere else content is written
+  // (see app/api/blogs/draft/route.js) — matching them here, not inventing
+  // separate bounds for the CLI/API path.
+  if ('title' in updates && updates.title != null && updates.title.length > MAX_TITLE_LEN) {
+    return errors.validationError(requestId, `title must be ${MAX_TITLE_LEN} characters or fewer`);
+  }
+  if (
+    'subtitle' in updates &&
+    updates.subtitle != null &&
+    updates.subtitle.length > MAX_SUBTITLE_LEN
+  ) {
+    return errors.validationError(
+      requestId,
+      `subtitle must be ${MAX_SUBTITLE_LEN} characters or fewer`,
+    );
+  }
+  if ('content' in updates && byteLength(updates.content) > MAX_BLOG_CONTENT_BYTES) {
+    return errors.validationError(requestId, 'content exceeds the maximum allowed size');
   }
 
   try {
@@ -149,6 +180,11 @@ export async function PATCH(request, { params }) {
     // Matches this repo's existing convention (see app/api/blogs/draft/route.js):
     // updated_at is unixepoch() seconds, not Date.now() milliseconds.
     const nowSeconds = Math.floor(Date.now() / 1000);
+
+    if ('content' in updates) {
+      const { compressBlogContent } = await import('../../../../../lib/compress.js');
+      updates.content = updates.content ? compressBlogContent(updates.content) : '';
+    }
 
     const setClauses = Object.keys(updates)
       .map((field) => `${field} = ?`)
